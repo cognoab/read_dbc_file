@@ -1,5 +1,5 @@
 import cantools
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 class CANMessageHandler:
     def __init__(self, dbc_file: str):
@@ -41,18 +41,43 @@ class CANMessageHandler:
                 return True
         return False
 
+    def get_signal_value(self, message_id: int, signal: cantools.database.can.Signal) -> Optional[int]:
+        if message_id in self.modified_messages:
+            data = self.modified_messages[message_id]
+            start_byte, start_bit_in_byte = self.get_start_byte_and_bit(signal.start)
+            value = 0
+            for i in range(signal.length):
+                byte_index = start_byte + (start_bit_in_byte + i) // 8
+                bit_position = (start_bit_in_byte + i) % 8
+                value |= ((data[byte_index] >> bit_position) & 1) << i
+            return value
+        return None
+
     def print_all_messages(self):
         print('\nAll CAN Messages:')
         for message in self.db.messages:
-            data_str = ', '.join(f'byte {i+1}: 0x00' for i in range(message.length))
-            print(f'ID: {hex(message.frame_id)}, {data_str}')
+            print(f'Message Name: {message.name}, ID: {hex(message.frame_id)}')
+            for signal in message.signals:
+                start_byte, start_bit_in_byte = self.get_start_byte_and_bit(signal.start)
+                current_value = self.get_signal_value(message.frame_id, signal)
+                value_str = f'Current Value: {current_value}' if current_value is not None else 'Not modified'
+                print(f'  Signal Name: {signal.name}, Start Byte: {start_byte}, Start Bit: {start_bit_in_byte}, Length: {signal.length}, {value_str}')
         print()
 
     def print_modified_messages(self):
+        if not self.modified_messages:
+            print('No messages have been modified yet.')
+            return
+        
         print('\nModified CAN Messages:')
         for message_id, data in self.modified_messages.items():
-            data_str = ', '.join(f'byte {i+1}: {hex(data[i])}' for i in range(len(data)))
-            print(f'ID: {hex(message_id)}, {data_str}')
+            message = self.db.get_message_by_frame_id(message_id)
+            print(f'Message Name: {message.name}, ID: {hex(message_id)}')
+            for signal in message.signals:
+                current_value = self.get_signal_value(message_id, signal)
+                if current_value is not None:
+                    start_byte, start_bit_in_byte = self.get_start_byte_and_bit(signal.start)
+                    print(f'  Signal Name: {signal.name}, Start Byte: {start_byte}, Start Bit: {start_bit_in_byte}, Length: {signal.length}, Current Value: {current_value}')
         print()
 
     def handle_input(self, user_input: str):
