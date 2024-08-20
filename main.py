@@ -1,19 +1,26 @@
 import cantools
 from typing import Dict, Tuple, Optional
+from enum import Enum
+
+class Endian(Enum):
+    LITTLE_ENDIAN = 'LITTLE_ENDIAN'
+    BIG_ENDIAN = 'BIG_ENDIAN'
 
 class CANMessageHandler:
-    def __init__(self, dbc_file: str):
+    def __init__(self, dbc_file: str, endian: Endian):
         # Load the .dbc file
         self.db = cantools.database.load_file(dbc_file)
         # Dictionary to store modified messages
         self.modified_messages: Dict[int, bytearray] = {}
+        # Set the endianness for the handler
+        self.endian = endian
 
     def get_start_byte_and_bit(self, start_bit: int) -> Tuple[int, int]:
         start_byte = start_bit // 8
         start_bit_in_byte = start_bit % 8
         return start_byte, start_bit_in_byte
 
-    def update_signal_value(self, message: cantools.database.can.Message, signal_name: str, value: int, is_little_endian: bool) -> bool:
+    def update_signal_value(self, message: cantools.database.can.Message, signal_name: str, value: int) -> bool:
         for signal in message.signals:
             if signal.name == signal_name:
                 start_byte, start_bit_in_byte = self.get_start_byte_and_bit(signal.start)
@@ -40,7 +47,7 @@ class CANMessageHandler:
                 # Set the signal value according to the endianness
                 value_shifted = value << start_bit_in_byte
                 for i in range(byte_count):
-                    if is_little_endian:
+                    if self.endian == Endian.LITTLE_ENDIAN:
                         byte_index = start_byte + i
                     else:
                         byte_index = start_byte + byte_count - 1 - i
@@ -65,12 +72,12 @@ class CANMessageHandler:
     def print_all_messages(self):
         print('\nAll CAN Messages:')
         for message in self.db.messages:
-            print(f'Message Name: {message.name}, ID: {hex(message.frame_id)} ({message.frame_id})')
+            print(f'Message Name: {message.name:<20} ID: {hex(message.frame_id):<10} ({message.frame_id:<5})')
             for signal in message.signals:
                 start_byte, start_bit_in_byte = self.get_start_byte_and_bit(signal.start)
                 current_value = self.get_signal_value(message.frame_id, signal)
                 value_str = f'Current Value: {current_value}' if current_value is not None else 'Not modified'
-                print(f'  Signal Name: {signal.name}, Start Byte: {start_byte}, Start Bit: {start_bit_in_byte}, Length: {signal.length}, {value_str}')
+                print(f'  Signal Name: {signal.name:<25} Start Byte: {start_byte:<3} Start Bit: {start_bit_in_byte:<3} Length: {signal.length:<3} {value_str}')
         print()
 
     def print_modified_messages(self):
@@ -81,12 +88,12 @@ class CANMessageHandler:
         print('\nModified CAN Messages:')
         for message_id, data in self.modified_messages.items():
             message = self.db.get_message_by_frame_id(message_id)
-            print(f'Message Name: {message.name}, ID: {hex(message_id)} ({message_id})')
+            print(f'Message Name: {message.name:<20} ID: {hex(message_id):<10} ({message_id:<5})')
             for signal in message.signals:
                 current_value = self.get_signal_value(message_id, signal)
                 if current_value is not None:
                     start_byte, start_bit_in_byte = self.get_start_byte_and_bit(signal.start)
-                    print(f'  Signal Name: {signal.name}, Start Byte: {start_byte}, Start Bit: {start_bit_in_byte}, Length: {signal.length}, Current Value: {current_value}')
+                    print(f'  Signal Name: {signal.name:<25} Start Byte: {start_byte:<3} Start Bit: {start_bit_in_byte:<3} Length: {signal.length:<3} Current Value: {current_value}')
         print()
 
     def print_modified_data(self):
@@ -97,10 +104,10 @@ class CANMessageHandler:
         print('\nModified CAN Message Data:')
         for message_id, data in self.modified_messages.items():
             message = self.db.get_message_by_frame_id(message_id)
-            print(f'Message: {message.name}, ID: {hex(message_id)} ({message_id})')
+            print(f'Message: {message.name:<20} ID: {hex(message_id):<10} ({message_id:<5})')
             for i, byte in enumerate(data):
                 binary_representation = f'{byte:08b}'
-                print(f'  Data {i+1}: 0x{byte:02X} ({binary_representation})')
+                print(f'  Data {i+1:<3}: 0x{byte:02X} ({binary_representation})')
         print()
 
     def search_message_by_id(self, id_str: str):
@@ -117,12 +124,12 @@ class CANMessageHandler:
 
         message = self.db.get_message_by_frame_id(search_id)
         if message:
-            print(f'\nMessage Found: {message.name}, ID: {hex(message.frame_id)} ({message.frame_id})')
+            print(f'\nMessage Found: {message.name:<20} ID: {hex(message.frame_id):<10} ({message.frame_id:<5})')
             for signal in message.signals:
                 start_byte, start_bit_in_byte = self.get_start_byte_and_bit(signal.start)
                 current_value = self.get_signal_value(message.frame_id, signal)
                 value_str = f'Current Value: {current_value}' if current_value is not None else 'Not modified'
-                print(f'  Signal Name: {signal.name}, Start Byte: {start_byte}, Start Bit: {start_bit_in_byte}, Length: {signal.length}, {value_str}')
+                print(f'  Signal Name: {signal.name:<25} Start Byte: {start_byte:<3} Start Bit: {start_bit_in_byte:<3} Length: {signal.length:<3} {value_str}')
         else:
             print(f'No message found with ID {id_str}.')
 
@@ -138,19 +145,18 @@ class CANMessageHandler:
             self.search_message_by_id(id_str)
         else:
             try:
-                signal_name, value_str, endian_str = user_input.split()
+                signal_name, value_str = user_input.split()
                 if value_str.lower().startswith('0x'):
                     value = int(value_str, 16)
                 else:
                     value = int(value_str)
-                is_little_endian = endian_str.upper() == 'LITTLE_ENDIAN'
             except ValueError:
-                print('Invalid input. Please enter in the format "SignalName Value Endian", e.g., "SIGNAL_01 0x20 LITTLE_ENDIAN".')
+                print('Invalid input. Please enter in the format "SignalName Value", e.g., "SIGNAL_01 0x20".')
                 return
 
             signal_found = False
             for message in self.db.messages:
-                if self.update_signal_value(message, signal_name, value, is_little_endian):
+                if self.update_signal_value(message, signal_name, value):
                     signal_found = True
                     print(f'Signal "{signal_name}" updated in message ID {hex(message.frame_id)}.')
                     break
@@ -160,10 +166,13 @@ class CANMessageHandler:
 
 
 def main():
-    handler = CANMessageHandler('your_file.dbc')
+    endian_choice = input('Choose endian type (LITTLE_ENDIAN/BIG_ENDIAN): ').strip().upper()
+    endian = Endian.LITTLE_ENDIAN if endian_choice == 'LITTLE_ENDIAN' else Endian.BIG_ENDIAN
+
+    handler = CANMessageHandler('your_file.dbc', endian)
     
     while True:
-        user_input = input('Enter signal name, value, and endian (e.g., "SIGNAL_01 0x20 LITTLE_ENDIAN"), or type "A" to show all messages, "L" to show modified messages, "D" to show modified data, "S [id]" to search by ID, "Q" to quit: ').strip()
+        user_input = input('Enter signal name and value, or type "A" to show all messages, "L" to show modified messages, "D" to show modified data, "S [id]" to search by ID, "Q" to quit: ').strip()
         
         if user_input.lower() == 'q':
             break
