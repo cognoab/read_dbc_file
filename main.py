@@ -2,17 +2,20 @@ import cantools
 from typing import Dict, Optional
 from colorama import Fore, Style, init
 import traceback
+
 # Initialize colorama
 init(autoreset=True)
 
-CAN_DB = './CANsignal.dbc'
+CAN_DB = './SMCCANsignal.dbc'
 
 class CANMessageHandler:
     def __init__(self, dbc_file: str):
         # Load the .dbc file
         self.db = cantools.database.load_file(dbc_file)
         # Dictionary to store modified signal values by message ID
-        self.modified_messages: Dict[int, Dict[str, int]] = {}
+        self.modified_messages: Dict[int, Dict[str, float]] = {}
+        # Dictionary to store raw modified signal values by message ID
+        self.raw_modified_messages: Dict[int, Dict[str, int]] = {}
 
     def find_message_by_signal(self, signal_name: str) -> Optional[str]:
         for message in self.db.messages:
@@ -49,11 +52,11 @@ class CANMessageHandler:
             print(f'Error: Value {value} does not fit within the signal length of {signal.length} bits after scaling. Max allowed raw value is {max_value}.')
             return False
 
-        # Update the signal raw value in the dictionary
+        # Update the signal value in the dictionary
         if message.frame_id not in self.modified_messages:
             self.modified_messages[message.frame_id] = {}
         
-        self.modified_messages[message.frame_id][signal_name] = raw_value
+        self.modified_messages[message.frame_id][signal_name] = value
         print(f'Signal "{signal_name}" updated to actual value {value} (raw value {raw_value}) in message ID {hex(message.frame_id)}.')
         return True
 
@@ -76,30 +79,47 @@ class CANMessageHandler:
             print(f'Error: Raw value {raw_value} does not fit within the signal length of {signal.length} bits. Max allowed raw value is {max_value}.')
             return False
 
-        # Update the signal raw value in the dictionary
-        if message.frame_id not in self.modified_messages:
-            self.modified_messages[message.frame_id] = {}
+        # Update the raw signal value in the dictionary
+        if message.frame_id not in self.raw_modified_messages:
+            self.raw_modified_messages[message.frame_id] = {}
         
-        self.modified_messages[message.frame_id][signal_name] = raw_value
+        self.raw_modified_messages[message.frame_id][signal_name] = raw_value
         print(f'Signal "{signal_name}" raw value updated to {raw_value} in message ID {hex(message.frame_id)}.')
         return True
 
     def print_signal_choices(self, signal):
         """Prints the possible choices for a signal."""
         if signal.choices:
-            print('    Choices:')
+            print(f'    Choices:')
             for value, description in signal.choices.items():
                 print(f'      {value}: {description}')
 
+    def print_long_signal_name(self, signal):
+        """Prints the long name of a signal if available."""
+        try:
+            if 'LongSignalName' in signal.dbc.attributes:
+                long_name = signal.dbc.attributes['LongSignalName'].value
+                if long_name:
+                    print(f'    {long_name}')
+        except Exception:
+            pass
+        
+    def print_signal_choices(self, signal):
+        """Prints the possible choices for a signal."""
+        if signal.choices:
+            print(f'    Choices:')
+            for value, description in signal.choices.items():
+                print(f'      {value}: {description}')
+                
     def print_modified_messages(self):
-        if not self.modified_messages:
+        if not self.modified_messages and not self.raw_modified_messages:
             print('No messages have been modified yet.')
             return
-        
+
         print('\nModified CAN Messages:')
-        for message_id, modified_signals in self.modified_messages.items():
+        for message_id in set(self.modified_messages.keys()).union(self.raw_modified_messages.keys()):
             message = self.db.get_message_by_frame_id(message_id)
-            
+
             # Get the current message data with default signal values
             try:
                 raw_data = bytearray(message.length)
@@ -107,29 +127,39 @@ class CANMessageHandler:
             except Exception as e:
                 print(f"Error decoding message '{message.name}': {e}")
                 default_data = {signal.name: 0 for signal in message.signals}
-            
+
             # Update default data with modified signals
-            all_signals = {**default_data, **modified_signals}
+            all_signals = {**default_data, **self.modified_messages.get(message_id, {})}
+            raw_signals = self.raw_modified_messages.get(message_id, {})
 
             # Encode the message with the full set of signals
+            for signal_name, raw_value in raw_signals.items():
+                all_signals[signal_name] = raw_value
+
             encoded_data = self.db.encode_message(message.name, all_signals)
 
             # Print message details like in "A", but only for modified messages
             print(f'{Fore.GREEN}Message: {message.name:<31} ID: {hex(message_id)} ({message_id}){Style.RESET_ALL}')
             for signal in message.signals:
-                raw_value = all_signals[signal.name]
+                if signal.name in raw_signals:
+                    raw_value = raw_signals[signal.name]
+                else:
+                    raw_value = all_signals[signal.name]
                 actual_value = raw_value * signal.scale + signal.offset
                 value_str = f'{raw_value} ({actual_value})'
-                modified_str = 'Modified' if signal.name in modified_signals else 'Default '
+                modified_str = 'Modified' if signal.name in self.modified_messages.get(message_id, {}) or signal.name in raw_signals else 'Default '
                 print(f'{Fore.CYAN}  Signal: {signal.name:<25} Start Byte: {signal.start // 8:<3} Start Bit: {signal.start % 8:<3} Length: {signal.length:<3} {modified_str}: {value_str}{Style.RESET_ALL}')
+                self.print_long_signal_name(signal)  # Call to print long signal name
+                self.print_signal_choices(signal)    # Call to print signal choices if available
             print(f'  Encoded Data:')
             for i, byte in enumerate(encoded_data):
                 print(f'    Data {i+1:<3}: 0x{byte:02X} ({byte:08b})')
         print()
 
+
     def get_signal_value(self, message_id: int, signal: cantools.database.can.Signal) -> Optional[int]:
-        if message_id in self.modified_messages:
-            data = self.db.encode_message(self.db.get_message_by_frame_id(message_id).name, self.modified_messages[message_id])
+        if message_id in self.raw_modified_messages:
+            data = self.db.encode_message(self.db.get_message_by_frame_id(message_id).name, self.raw_modified_messages[message_id])
             start_byte = signal.start // 8
             start_bit_in_byte = signal.start % 8
             value = 0
@@ -213,7 +243,8 @@ class CANMessageHandler:
         print(f'\n{Fore.GREEN}Message: {message.name:<30} ID: {hex(message.frame_id)} ({message.frame_id}){Style.RESET_ALL}')
         for signal in message.signals:
             print(f'{Fore.CYAN}  Signal: {signal.name:<25} Start Byte: {signal.start // 8:<3} Start Bit: {signal.start % 8:<3} Length: {signal.length:<3}{Style.RESET_ALL}')
-            self.print_signal_choices(signal)
+            self.print_long_signal_name(signal)  # Call to print long signal name
+            self.print_signal_choices(signal)    # Call to print signal choices if available
 
 def main():
     handler = CANMessageHandler(CAN_DB)
