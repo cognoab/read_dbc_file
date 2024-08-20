@@ -28,15 +28,18 @@ class CANMessageHandler:
                     self.modified_messages[message.frame_id] = bytearray(message.length)
                 
                 data = self.modified_messages[message.frame_id]
-                
-                # Insert the value into the appropriate bytes
-                value_shifted = value << start_bit_in_byte
-                for i in range(signal.length):
-                    byte_index = start_byte + (start_bit_in_byte + i) // 8
-                    bit_position = (start_bit_in_byte + i) % 8
-                    bit_value = (value_shifted >> i) & 1
-                    data[byte_index] &= ~(1 << bit_position)  # Clear the bit
-                    data[byte_index] |= (bit_value << bit_position)  # Set the bit
+
+                # Clear the bits corresponding to the signal
+                mask = ((1 << signal.length) - 1) << start_bit_in_byte
+                for i in range(start_byte, start_byte + (start_bit_in_byte + signal.length + 7) // 8):
+                    data[i] &= ~(mask & 0xFF)
+                    mask >>= 8
+
+                # Set the signal value
+                value <<= start_bit_in_byte
+                for i in range(start_byte, start_byte + (start_bit_in_byte + signal.length + 7) // 8):
+                    data[i] |= (value & 0xFF)
+                    value >>= 8
 
                 return True
         return False
@@ -80,11 +83,27 @@ class CANMessageHandler:
                     print(f'  Signal Name: {signal.name}, Start Byte: {start_byte}, Start Bit: {start_bit_in_byte}, Length: {signal.length}, Current Value: {current_value}')
         print()
 
+    def print_modified_data(self):
+        if not self.modified_messages:
+            print('No messages have been modified yet.')
+            return
+        
+        print('\nModified CAN Message Data:')
+        for message_id, data in self.modified_messages.items():
+            message = self.db.get_message_by_frame_id(message_id)
+            print(f'Message: {message.name}')
+            for i, byte in enumerate(data):
+                binary_representation = f'{byte:08b}'
+                print(f'  Data {i+1}: 0x{byte:02X} ({binary_representation})')
+        print()
+
     def handle_input(self, user_input: str):
         if user_input.upper() == 'A':
             self.print_all_messages()
         elif user_input.upper() == 'L':
             self.print_modified_messages()
+        elif user_input.upper() == 'D':
+            self.print_modified_data()
         else:
             try:
                 signal_name, value_str = user_input.split()
@@ -108,7 +127,7 @@ def main():
     handler = CANMessageHandler('your_file.dbc')
     
     while True:
-        user_input = input('Enter signal name and value, or type "A" to show all messages, "L" to show modified messages, "Q" to quit: ').strip()
+        user_input = input('Enter signal name and value, or type "A" to show all messages, "L" to show modified messages, "D" to show modified data, "Q" to quit: ').strip()
         
         if user_input.lower() == 'q':
             break
