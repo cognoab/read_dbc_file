@@ -6,7 +6,7 @@ import traceback
 # Initialize colorama
 init(autoreset=True)
 
-CAN_DB = './SMCCANsignal.dbc'
+CAN_DB = './YY8_Version_1_1(IDS)_SMCCANsignal.dbc'
 
 class CANMessageHandler:
     def __init__(self, dbc_file: str):
